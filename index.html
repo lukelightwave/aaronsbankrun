@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aaron's Bank Run (Sokoban)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the game board */
+        #gameCanvas {
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+            border: 4px solid #333;
+            border-radius: 8px;
+            touch-action: none; /* Prevents default mobile scrolling/zoom */
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-900 text-white font-sans flex flex-col items-center justify-center min-h-screen p-4">
+
+    <h1 class="text-3xl font-bold mb-4 text-yellow-400">Aaron's Bank Run</h1>
+    <p class="text-sm mb-6 text-gray-400">Push the cash stack (2x1) completely inside the Bank vault (4x4).</p>
+    
+    <div class="flex flex-col items-center justify-center space-y-4">
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- Instruction and Status Panel -->
+        <div id="statusPanel" class="w-full max-w-sm text-center">
+            <p id="gameMessage" class="text-lg font-semibold h-6">Move Aaron with Arrow Keys</p>
+            <p id="resetHint" class="text-sm text-gray-500 mt-1"></p>
+        </div>
+
+        <!-- Touch Controls (Visible on mobile) -->
+        <div id="touchControls" class="grid grid-cols-3 gap-2 mt-4 md:hidden">
+            <div></div>
+            <button onclick="game.attemptMove(0, -1)" class="p-3 bg-gray-700 hover:bg-gray-600 rounded-full shadow-lg transition duration-150 active:scale-95">
+                <svg class="w-6 h-6 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path></svg>
+            </button>
+            <div></div>
+            <button onclick="game.attemptMove(-1, 0)" class="p-3 bg-gray-700 hover:bg-gray-600 rounded-full shadow-lg transition duration-150 active:scale-95">
+                <svg class="w-6 h-6 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+            </button>
+            <button onclick="game.resetGame()" class="p-3 bg-red-600 hover:bg-red-500 rounded-lg shadow-lg text-sm transition duration-150 active:scale-95">Reset</button>
+            <button onclick="game.attemptMove(1, 0)" class="p-3 bg-gray-700 hover:bg-gray-600 rounded-full shadow-lg transition duration-150 active:scale-95">
+                <svg class="w-6 h-6 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            </button>
+            <div></div>
+            <button onclick="game.attemptMove(0, 1)" class="p-3 bg-gray-700 hover:bg-gray-600 rounded-full shadow-lg transition duration-150 active:scale-95">
+                <svg class="w-6 h-6 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+            </button>
+            <div></div>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const GRID_SIZE = 40;
+        const GRID_WIDTH = 20;
+        const GRID_HEIGHT = 15; 
+        const SCREEN_WIDTH = GRID_WIDTH * GRID_SIZE;
+        const SCREEN_HEIGHT = GRID_HEIGHT * GRID_SIZE;
+
+        // --- Colors ---
+        const BLACK = '#000000';
+        const WHITE = '#FFFFFF';
+        const SKIN_TONE = '#FFC896';
+        const SHIRT_COLOR = '#FFFF00'; 
+        const PANTS_COLOR = '#323296';
+        const BODY_COLOR = '#C83232'; 
+        const HAIR_COLOR = '#323232';
+        const CASH_DARK = '#008000';
+        const CASH_LIGHT = '#32C832';
+        const WALL_COLOR = '#323232';
+        const FLOOR_COLOR = '#141428';
+        const BANK_COLOR = '#B4B4B4';
+        const ROOF_COLOR = '#646464';
+        const GOLD = '#FFD700';
+
+        let canvas, ctx;
+        let gameInstance;
+
+        // --- Game Entities ---
+        class Entity {
+            constructor(x, y, width = 1, height = 1) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+            }
+
+            getPx(coord) { return coord * GRID_SIZE; }
+            getPy(coord) { return coord * GRID_SIZE; }
+
+            getRect() {
+                const px = this.getPx(this.x);
+                const py = this.getPy(this.y);
+                return { x: px, y: py, w: this.width * GRID_SIZE, h: this.height * GRID_SIZE };
+            }
+        }
+
+        class Player extends Entity {
+            constructor(x, y) {
+                super(x, y, 1, 1);
+                this.isCelebrating = false;
+            }
+
+            draw(ctx) {
+                const px = this.getPx(this.x);
+                const py = this.getPy(this.y);
+                const g = GRID_SIZE;
+
+                // --- Detailed Body Parts within 1x1 Cell ---
+                
+                // 1. Legs/Feet (Bottom)
+                const legWidth = 8;
+                const legHeight = 10;
+                const footHeight = 4;
+                const torsoHeight = 18;
+                const torsoY = py + g - legHeight - footHeight - torsoHeight;
+                const torsoX = px + 5;
+                const torsoWidth = g - 10;
+
+                // Left Leg
+                ctx.fillStyle = PANTS_COLOR;
+                ctx.fillRect(px + 5, py + g - legHeight - footHeight, legWidth, legHeight);
+                // Left Foot
+                ctx.fillStyle = BLACK;
+                ctx.fillRect(px + 5, py + g - footHeight, legWidth + 1, footHeight);
+
+                // Right Leg
+                ctx.fillStyle = PANTS_COLOR;
+                ctx.fillRect(px + g - 5 - legWidth, py + g - legHeight - footHeight, legWidth, legHeight);
+                // Right Foot
+                ctx.fillStyle = BLACK;
+                ctx.fillRect(px + g - 5 - legWidth - 1, py + g - footHeight, legWidth + 1, footHeight);
+
+                // 2. Torso (Center)
+                ctx.fillStyle = SHIRT_COLOR;
+                ctx.fillRect(torsoX, torsoY, torsoWidth, torsoHeight);
+                
+                // 3. Head (Top)
+                const headRadius = 8;
+                const headCenterY = torsoY - headRadius - 2;
+                const headCenterX = px + g / 2;
+                ctx.fillStyle = SKIN_TONE;
+                ctx.beginPath();
+                ctx.arc(headCenterX, headCenterY, headRadius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Hair/Top of Head (Arc)
+                ctx.fillStyle = HAIR_COLOR;
+                ctx.beginPath();
+                ctx.arc(headCenterX, headCenterY, headRadius, 0, Math.PI, true); // True for counter-clockwise (top half)
+                ctx.fill();
+
+                // 4. Shirt Text ("AAaon")
+                ctx.fillStyle = BLACK;
+                ctx.font = 'bold 10px Terminal';
+                ctx.textAlign = 'center';
+                ctx.fillText('AAaon', headCenterX, torsoY + torsoHeight / 2 + 3);
+                
+                // 5. Arms and Hands
+                const armThickness = 3;
+                const handSize = 4;
+                const shoulderY = torsoY + 4;
+                
+                ctx.strokeStyle = BODY_COLOR;
+                ctx.lineWidth = armThickness;
+                ctx.lineCap = 'round';
+
+                const drawHand = (x, y) => {
+                    ctx.fillStyle = SKIN_TONE;
+                    ctx.beginPath();
+                    ctx.arc(x, y, handSize, 0, Math.PI * 2);
+                    ctx.fill();
+                };
+
+                if (this.isCelebrating) {
+                    // Left Arm (V-shape up)
+                    ctx.beginPath();
+                    ctx.moveTo(torsoX, shoulderY);
+                    ctx.lineTo(px + 3, py + 3);
+                    ctx.stroke();
+                    drawHand(px + 3, py + 3);
+
+                    // Right Arm (V-shape up)
+                    ctx.beginPath();
+                    ctx.moveTo(torsoX + torsoWidth, shoulderY);
+                    ctx.lineTo(px + g - 3, py + 3);
+                    ctx.stroke();
+                    drawHand(px + g - 3, py + 3);
+
+                } else {
+                    // Normal Arms (Down)
+                    const armEndY = torsoY + torsoHeight - 2;
+                    
+                    // Left Arm
+                    ctx.beginPath();
+                    ctx.moveTo(torsoX, shoulderY);
+                    ctx.lineTo(torsoX, armEndY);
+                    ctx.stroke();
+                    drawHand(torsoX, armEndY);
+                    
+                    // Right Arm
+                    ctx.beginPath();
+                    ctx.moveTo(torsoX + torsoWidth, shoulderY);
+                    ctx.lineTo(torsoX + torsoWidth, armEndY);
+                    ctx.stroke();
+                    drawHand(torsoX + torsoWidth, armEndY);
+                }
+            }
+        }
+
+        class CashStack extends Entity {
+            constructor(x, y) {
+                super(x, y, 2, 1); // 2 blocks wide, 1 block high
+            }
+
+            draw(ctx) {
+                const px = this.getPx(this.x);
+                const py = this.getPy(this.y);
+                const totalWidth = this.width * GRID_SIZE;
+                
+                // 1. Dark green/shadow base (gives 3D depth)
+                const baseRect = { x: px + 4, y: py + 4, w: totalWidth - 8, h: GRID_SIZE - 8 };
+                ctx.fillStyle = CASH_DARK;
+                ctx.fillRect(baseRect.x, baseRect.y, baseRect.w, baseRect.h);
+                
+                // 2. Main Stack Block (lighter green, offset up and left)
+                const stackRect = { x: px + 2, y: py + 2, w: totalWidth - 8, h: GRID_SIZE - 8 };
+                ctx.fillStyle = CASH_LIGHT;
+                ctx.fillRect(stackRect.x, stackRect.y, stackRect.w, stackRect.h);
+
+                const line_color = '#006400';
+                const top_left_x = px + 2;
+                const top_left_y = py + 2;
+                
+                // 3. Top surface details (representing bills)
+                ctx.strokeStyle = line_color;
+                ctx.lineWidth = 1;
+                for (let i = 1; i < 4; i++) {
+                    const y_offset = top_left_y + i * (GRID_SIZE / 5) - 4;
+                    ctx.beginPath();
+                    ctx.moveTo(top_left_x + 4, y_offset);
+                    ctx.lineTo(top_left_x + totalWidth - 15, y_offset);
+                    ctx.stroke();
+                }
+                
+                // Divider line between the two logical blocks
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(px + GRID_SIZE, top_left_y + 4);
+                ctx.lineTo(px + GRID_SIZE, py + GRID_SIZE - 4);
+                ctx.stroke();
+                
+                // 4. Highlight (for shine)
+                ctx.strokeStyle = WHITE;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(top_left_x + 4, top_left_y + 4);
+                ctx.lineTo(top_left_x + totalWidth - 15, top_left_y + 4);
+                ctx.stroke();
+                
+                // 5. Side shadow
+                ctx.fillStyle = '#004600';
+                ctx.fillRect(px + totalWidth - 6, py + 4, 2, GRID_SIZE - 8);
+            }
+        }
+
+        class Bank extends Entity {
+            constructor(x, y) {
+                super(x, y, 4, 4); // 4 blocks wide, 4 blocks high
+            }
+
+            draw(ctx) {
+                const px = this.getPx(this.x);
+                const py = this.getPy(this.y);
+                const totalWidth = this.width * GRID_SIZE;
+                const totalHeight = this.height * GRID_SIZE;
+                
+                // 1. Main Building Block (Occupies the 4x4 space minus the roof block height)
+                const buildingY = py + GRID_SIZE;
+                const buildingHeight = totalHeight - GRID_SIZE;
+                ctx.fillStyle = BANK_COLOR;
+                ctx.fillRect(px, buildingY, totalWidth, buildingHeight);
+                
+                // 2. Roof (Spans 4 blocks wide, sits one block up)
+                ctx.fillStyle = ROOF_COLOR;
+                ctx.beginPath();
+                ctx.moveTo(px, buildingY);
+                ctx.lineTo(px + totalWidth / 2, py); // Peak
+                ctx.lineTo(px + totalWidth, buildingY);
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.strokeStyle = BLACK;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(px, buildingY);
+                ctx.lineTo(px + totalWidth, buildingY);
+                ctx.stroke(); // Roof edge line
+
+                // 3. Vault Door/Entrance (Goal Area - centered on the building base)
+                const vaultWidth = GRID_SIZE * 1.5;
+                const vaultHeight = GRID_SIZE * 1.5;
+                const vaultX = px + totalWidth / 2 - vaultWidth / 2;
+                const vaultY = py + totalHeight - vaultHeight;
+                ctx.fillStyle = GOLD;
+                // Since Canvas doesn't have native border-radius for fillRect, we'll approximate with fillRect
+                ctx.fillRect(vaultX, vaultY, vaultWidth, vaultHeight); 
+                
+                // 4. Vault Handle (Circle)
+                const vaultCenterX = vaultX + vaultWidth / 2;
+                const vaultCenterY = vaultY + vaultHeight / 2;
+                ctx.fillStyle = BLACK;
+                ctx.beginPath();
+                ctx.arc(vaultCenterX, vaultCenterY, 8, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Vault Handle (Line)
+                ctx.strokeStyle = BLACK;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(vaultCenterX, vaultCenterY);
+                ctx.lineTo(vaultCenterX, vaultCenterY - 10);
+                ctx.stroke();
+
+                // 5. "GRAND BANK" Text on the building
+                ctx.fillStyle = BLACK;
+                ctx.font = 'bold 20px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('GRAND BANK', px + totalWidth / 2, py + GRID_SIZE * 1.5 + 8);
+            }
+        }
+
+        class Game {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.messageEl = document.getElementById('gameMessage');
+                this.hintEl = document.getElementById('resetHint');
+                
+                this.canvas.width = SCREEN_WIDTH;
+                this.canvas.height = SCREEN_HEIGHT;
+                
+                this.gameLoopInterval = null;
+                this.resetGame();
+
+                this.setupInput();
+                this.startGameLoop();
+            }
+
+            resetGame() {
+                // Aaron starts on the left side
+                this.player = new Player(1, Math.floor(GRID_HEIGHT / 2));
+                
+                // Bank is large (4x4) and positioned high on the right
+                this.bank = new Bank(GRID_WIDTH - 5, Math.floor(GRID_HEIGHT / 2) - 2);
+                
+                // Cash starts near Aaron (2 blocks wide)
+                this.cash = new CashStack(3, Math.floor(GRID_HEIGHT / 2)); 
+                
+                this.gameWon = false;
+                this.message = "Move Aaron with Arrow Keys (or touch controls)";
+                this.hint = "";
+                this.updateUI();
+            }
+            
+            setupInput() {
+                document.addEventListener('keydown', (e) => {
+                    if (this.gameWon) {
+                        if (e.key === 'r' || e.key === 'R') {
+                            this.resetGame();
+                        }
+                        return;
+                    }
+
+                    let dx = 0, dy = 0;
+                    switch (e.key) {
+                        case 'ArrowUp': dy = -1; break;
+                        case 'ArrowDown': dy = 1; break;
+                        case 'ArrowLeft': dx = -1; break;
+                        case 'ArrowRight': dx = 1; break;
+                    }
+                    if (dx !== 0 || dy !== 0) {
+                        e.preventDefault(); // Prevent scrolling
+                        this.attemptMove(dx, dy);
+                    }
+                });
+            }
+
+            attemptMove(dx, dy) {
+                if (this.gameWon) return;
+
+                const newPlayerX = this.player.x + dx;
+                const newPlayerY = this.player.y + dy;
+
+                // Check screen bounds for player (playable area is 1 to GRID_WIDTH-2 and 1 to GRID_HEIGHT-2)
+                const inBounds = (x, y) => (x > 0 && x < GRID_WIDTH - 1 && y > 0 && y < GRID_HEIGHT - 1);
+                if (!inBounds(newPlayerX, newPlayerY)) {
+                    return;
+                }
+
+                // Check if the player is moving into *any* part of the 2-block cash stack
+                let isPushing = false;
+                if (newPlayerX === this.cash.x && newPlayerY === this.cash.y) {
+                    isPushing = true; // Pushing the left block
+                } else if (newPlayerX === this.cash.x + 1 && newPlayerY === this.cash.y) {
+                    isPushing = true; // Pushing the right block
+                }
+
+                if (isPushing) {
+                    const newCashX = this.cash.x + dx;
+                    const newCashY = this.cash.y + dy;
+                    
+                    // Check if the resulting position of the entire 2-block stack is in the play area
+                    const cashFarX = newCashX + this.cash.width - 1;
+                    const isXInBounds = (newCashX > 0 && cashFarX < GRID_WIDTH - 1);
+                    const isYInBounds = (newCashY > 0 && newCashY < GRID_HEIGHT - 1);
+
+                    if (isXInBounds && isYInBounds) {
+                        // Check if the new cash position overlaps with the bank (which is allowed for winning)
+                        // In Sokoban, boxes cannot be pushed onto other boxes (which we don't have)
+                        // or unmovable obstacles (only walls here, checked by bounds).
+                        
+                        // Move the cash
+                        this.cash.x = newCashX;
+                        this.cash.y = newCashY;
+                        // Then move the player
+                        this.player.x = newPlayerX;
+                        this.player.y = newPlayerY;
+                    }
+                } else {
+                    // Regular player move
+                    this.player.x = newPlayerX;
+                    this.player.y = newPlayerY;
+                }
+                this.update();
+            }
+
+            update() {
+                if (this.gameWon) {
+                    this.player.isCelebrating = true;
+                    this.updateUI();
+                    return;
+                }
+
+                // Check win condition: The entire 2x1 Cash Stack must be fully contained within the 4x4 Bank area.
+                
+                // Cash boundaries: [cash.x, cash.x + 1] in X, [cash.y] in Y
+                // Bank boundaries: [bank.x, bank.x + 3] in X, [bank.y, bank.y + 3] in Y
+                
+                const cashFullyInsideX = (this.cash.x >= this.bank.x) && 
+                                         (this.cash.x + this.cash.width - 1 <= this.bank.x + this.bank.width - 1);
+                const cashFullyInsideY = (this.cash.y >= this.bank.y) && 
+                                         (this.cash.y + this.cash.height - 1 <= this.bank.y + this.bank.height - 1);
+
+                if (cashFullyInsideX && cashFullyInsideY) {
+                    this.gameWon = true;
+                    this.message = "SUCCESS! Aaron is celebrating!";
+                    this.hint = "Press R or Reset to play again.";
+                    this.player.isCelebrating = true;
+                } else {
+                    this.player.isCelebrating = false;
+                    this.message = "Move Aaron with Arrow Keys (or touch controls)";
+                    this.hint = "";
+                }
+                this.updateUI();
+                this.draw();
+            }
+
+            updateUI() {
+                this.messageEl.textContent = this.message;
+                this.hintEl.textContent = this.hint;
+
+                if (this.gameWon) {
+                    this.messageEl.classList.remove('text-lg', 'font-semibold');
+                    this.messageEl.classList.add('text-2xl', 'font-extrabold', 'text-green-400');
+                } else {
+                    this.messageEl.classList.add('text-lg', 'font-semibold');
+                    this.messageEl.classList.remove('text-2xl', 'font-extrabold', 'text-green-400');
+                }
+            }
+
+            drawBlock(x, y, color) {
+                this.ctx.fillStyle = color;
+                this.ctx.fillRect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+            }
+
+            draw() {
+                this.ctx.fillStyle = BLACK;
+                this.ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+                
+                // 1. Draw Walls (Outer Border)
+                this.ctx.fillStyle = WALL_COLOR;
+                for (let x = 0; x < GRID_WIDTH; x++) {
+                    this.ctx.fillRect(x * GRID_SIZE, 0, GRID_SIZE, GRID_SIZE);
+                    this.ctx.fillRect(x * GRID_SIZE, (GRID_HEIGHT - 1) * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+                }
+                for (let y = 1; y < GRID_HEIGHT - 1; y++) {
+                    this.ctx.fillRect(0, y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+                    this.ctx.fillRect((GRID_WIDTH - 1) * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+                }
+
+                // 2. Draw Floor/Play Area
+                this.ctx.fillStyle = FLOOR_COLOR;
+                this.ctx.fillRect(GRID_SIZE, GRID_SIZE, SCREEN_WIDTH - 2 * GRID_SIZE, SCREEN_HEIGHT - 2 * GRID_SIZE);
+
+                // 3. Draw the Bank goal first (4x4)
+                this.bank.draw(this.ctx);
+                
+                // 4. Draw the Cash stack (2x1)
+                this.cash.draw(this.ctx);
+                
+                // 5. Draw Aaron (Player 1x1)
+                this.player.draw(this.ctx);
+            }
+
+            startGameLoop() {
+                const drawFrame = () => {
+                    this.draw();
+                    requestAnimationFrame(drawFrame);
+                };
+                requestAnimationFrame(drawFrame);
+            }
+        }
+
+        window.onload = () => {
+            gameInstance = new Game();
+        };
+    </script>
+</body>
+</html>
